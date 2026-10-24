@@ -1,0 +1,42 @@
+generator client {
+  provider      = "prisma-client-js"
+  // linux-musl-openssl-3.0.x = the node:22-alpine runtime image.
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Competitor {
+  id        String     @id
+  createdAt DateTime   @default(now())
+  snapshots Snapshot[]
+}
+
+/// `summary` is null while the LLM call is in flight, when it failed, or when
+/// nothing changed. `summaryStatus` disambiguates those cases for the UI.
+enum SummaryStatus {
+  NONE // changed = false, no LLM call needed
+  PENDING // snapshot saved, LLM call in flight
+  DONE // summary written
+  FAILED // LLM timed out / errored; snapshot data is intact
+}
+
+model Snapshot {
+  id            String        @id @default(uuid()) @db.Uuid
+  competitorId  String
+  competitor    Competitor    @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  fetchedAt     DateTime      @default(now())
+  title         String
+  tagline       String
+  price         String
+  description   String
+  changed       Boolean
+  summary       String?
+  summaryStatus SummaryStatus @default(NONE)
+
+  // Serves both "latest snapshot for X" (scheduler) and the timeline query.
+  @@index([competitorId, fetchedAt(sort: Desc)])
+}

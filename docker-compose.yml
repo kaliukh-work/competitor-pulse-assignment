@@ -1,0 +1,67 @@
+name: competitor-pulse
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: pulse
+      POSTGRES_PASSWORD: pulse
+      POSTGRES_DB: competitor_pulse
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pulse -d competitor_pulse"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  mock-llm:
+    build: ./mock-llm
+    # Published so you can drive /control/configure from the host to test
+    # latency and failures, e.g.:
+    #   curl -XPOST localhost:4001/control/configure -d '{"failNext":1}'
+    ports:
+      - "4001:4001"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4001/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://pulse:pulse@db:5432/competitor_pulse?schema=public
+      PORT: "3000"
+      POLL_CRON: ${POLL_CRON:-*/30 * * * * *}
+      POLL_CONCURRENCY: ${POLL_CONCURRENCY:-10}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://mock-llm:4001/v1}
+      LLM_MODEL: ${LLM_MODEL:-mock-llm}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-10000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      # The backend tolerates the LLM being down; this just orders startup.
+      mock-llm:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pgdata:
